@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频转 MP3</title>
+<style>
+  :root {
+    --bg: #f4f4f0;
+    --card: #ffffff;
+    --ink: #2b2b2b;
+    --muted: #8a8a84;
+    --accent: #4a7c59;
+    --accent-soft: #e8f0ea;
+    --line: #e3e3dd;
+    --danger: #b0524e;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .app { width: 100%; max-width: 460px; }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 6px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.04);
+  }
+  .drop {
+    border: 2px dashed var(--line);
+    border-radius: 12px;
+    padding: 42px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .drop .icon { font-size: 34px; margin-bottom: 10px; }
+  .drop .hint { font-size: 15px; margin-bottom: 4px; }
+  .drop .tip { font-size: 12px; color: var(--muted); }
+  input[type=file] { display: none; }
+  .row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; font-size: 14px; }
+  select {
+    font: inherit; font-size: 14px;
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--ink);
+  }
+  .file-info {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: var(--accent-soft);
+    border-radius: 10px;
+    font-size: 13px;
+    display: none;
+    word-break: break-all;
+  }
+  .file-info .name { font-weight: 600; }
+  .file-info .meta { color: var(--muted); margin-top: 2px; }
+  button.go {
+    width: 100%;
+    margin-top: 16px;
+    padding: 13px;
+    font: inherit; font-size: 15px; font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: opacity .15s;
+  }
+  button.go:disabled { opacity: .45; cursor: not-allowed; }
+  .progress-wrap { margin-top: 16px; display: none; }
+  .progress-label { font-size: 13px; color: var(--muted); margin-bottom: 6px; display: flex; justify-content: space-between; }
+  .bar { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0%; background: var(--accent); border-radius: 99px; transition: width .2s; }
+  .result {
+    margin-top: 16px;
+    display: none;
+    text-align: center;
+  }
+  .result a {
+    display: inline-block;
+    padding: 13px 28px;
+    font-size: 15px; font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border-radius: 10px;
+    text-decoration: none;
+  }
+  .result .meta { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .error {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: #f7ecec;
+    border-radius: 10px;
+    color: var(--danger);
+    font-size: 13px;
+    display: none;
+  }
+  .foot { text-align: center; font-size: 12px; color: var(--muted); margin-top: 18px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>视频转 MP3</h1>
+  <p class="sub">在浏览器本地完成，文件不会上传到任何服务器</p>
+  <div class="card">
+    <div class="drop" id="drop">
+      <div class="icon">🎬</div>
+      <div class="hint">点击选择或拖入 MP4 文件</div>
+      <div class="tip">100 MB 以内</div>
+    </div>
+    <input type="file" id="file" accept="video/mp4,video/quicktime,audio/mp4,.mp4,.m4v,.mov,.m4a">
+    <div class="file-info" id="fileInfo">
+      <div class="name" id="fileName"></div>
+      <div class="meta" id="fileMeta"></div>
+    </div>
+    <div class="row">
+      <span>音质（码率）</span>
+      <select id="bitrate">
+        <option value="96">96 kbps · 较小</option>
+        <option value="128" selected>128 kbps · 推荐</option>
+        <option value="192">192 kbps · 较好</option>
+        <option value="256">256 kbps · 最好</option>
+      </select>
+    </div>
+    <button class="go" id="go" disabled>转换为 MP3</button>
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-label"><span id="stage">处理中</span><span id="pct">0%</span></div>
+      <div class="bar"><i id="fill"></i></div>
+    </div>
+    <div class="result" id="result">
+      <a id="dl" download>⬇ 下载 MP3</a>
+      <div class="meta" id="resultMeta"></div>
+    </div>
+    <div class="error" id="error"></div>
+  </div>
+  <p class="foot">支持 mp4 / mov / m4a 中的 AAC 音轨</p>
+</div>
+
+<script src="__LAME__"></script>
+<script>
+const MAX_MB = 100;
+const MAX_SIZE = MAX_MB * 1024 * 1024;
+const $ = id => document.getElementById(id);
+const drop = $('drop'), fileInput = $('file'), go = $('go');
+let picked = null;
+let lastUrl = null;
+
+function fmtSize(n) {
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+function fmtDur(sec) {
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return m ? `${m} 分 ${s} 秒` : `${s} 秒`;
+}
+function showError(msg) {
+  $('error').textContent = msg;
+  $('error').style.display = 'block';
+}
+function reset() {
+  $('error').style.display = 'none';
+  $('result').style.display = 'none';
+  $('progressWrap').style.display = 'none';
+  if (lastUrl) { URL.revokeObjectURL(lastUrl); lastUrl = null; }
+}
+
+function pick(file) {
+  reset();
+  if (!file) return;
+  if (file.size > MAX_SIZE) {
+    picked = null;
+    go.disabled = true;
+    $('fileInfo').style.display = 'none';
+    showError(`文件 ${fmtSize(file.size)}，超过 ${MAX_MB} MB 上限，请换个小一点的文件。`);
+    return;
+  }
+  picked = file;
+  $('fileName').textContent = file.name;
+  $('fileMeta').textContent = fmtSize(file.size);
+  $('fileInfo').style.display = 'block';
+  go.disabled = false;
+}
+
+drop.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => pick(fileInput.files[0]));
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => {
+  e.preventDefault();
+  drop.classList.remove('over');
+  pick(e.dataTransfer.files[0]);
+});
+
+function setProgress(stage, ratio) {
+  $('progressWrap').style.display = 'block';
+  $('stage').textContent = stage;
+  $('pct').textContent = Math.round(ratio * 100) + '%';
+  $('fill').style.width = (ratio * 100) + '%';
+}
+
+function floatTo16(f32) {
+  const out = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    const s = Math.max(-1, Math.min(1, f32[i]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+  return out;
+}
+
+// 核心转换：任意含音轨的媒体 Blob → MP3 Blob（测试也会直接调它）
+async function convertBlob(blob, kbps, onProgress) {
+  const buf = await blob.arrayBuffer();
+  onProgress && onProgress('解码音轨', 0);
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  let audio;
+  try {
+    audio = await ctx.decodeAudioData(buf);
+  } finally {
+    ctx.close();
+  }
+  const channels = Math.min(2, audio.numberOfChannels);
+  const left = floatTo16(audio.getChannelData(0));
+  const right = channels === 2 ? floatTo16(audio.getChannelData(1)) : null;
+  const encoder = new lamejs.Mp3Encoder(channels, audio.sampleRate, kbps);
+  const chunkSize = 1152 * 40;
+  const parts = [];
+  for (let i = 0; i < left.length; i += chunkSize) {
+    const l = left.subarray(i, i + chunkSize);
+    const r = right ? right.subarray(i, i + chunkSize) : undefined;
+    const mp3 = channels === 2 ? encoder.encodeBuffer(l, r) : encoder.encodeBuffer(l);
+    if (mp3.length) parts.push(mp3);
+    if (onProgress) {
+      onProgress('编码 MP3', i / left.length);
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+  const end = encoder.flush();
+  if (end.length) parts.push(end);
+  onProgress && onProgress('完成', 1);
+  return { blob: new Blob(parts, { type: 'audio/mpeg' }), duration: audio.duration };
+}
+window.convertBlob = convertBlob; // 供自动化测试调用
+
+go.addEventListener('click', async () => {
+  if (!picked) return;
+  reset();
+  go.disabled = true;
+  const kbps = parseInt($('bitrate').value, 10);
+  try {
+    const { blob, duration } = await convertBlob(picked, kbps, setProgress);
+    lastUrl = URL.createObjectURL(blob);
+    const a = $('dl');
+    a.href = lastUrl;
+    a.download = picked.name.replace(/\.[^.]+$/, '') + '.mp3';
+    $('resultMeta').textContent = `${fmtDur(duration)} · ${fmtSize(blob.size)} · ${kbps} kbps`;
+    $('result').style.display = 'block';
+  } catch (err) {
+    console.error(err);
+    $('progressWrap').style.display = 'none';
+    showError('转换失败：没能从这个文件里解出音轨。请确认它是带声音的 MP4（AAC 音轨）。');
+  } finally {
+    go.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
