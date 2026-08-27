@@ -121,7 +121,7 @@
     <div class="drop" id="drop">
       <div class="icon">🎬</div>
       <div class="hint">点击选择或拖入 MP4 文件</div>
-      <div class="tip">100 MB 以内</div>
+      <div class="tip">1 GB 以内</div>
     </div>
     <input type="file" id="file" accept="video/mp4,video/quicktime,audio/mp4,.mp4,.m4v,.mov,.m4a">
     <div class="file-info" id="fileInfo">
@@ -462,14 +462,15 @@ a.length>D&&(D=a.length,p=0|1.25*D+7200,r=new Int8Array(p));a=u.lame_encode_buff
 
 </script>
 <script>
-const MAX_MB = 100;
-const MAX_SIZE = MAX_MB * 1024 * 1024;
+const MAX_LABEL = '1 GB';
+const MAX_SIZE = 1024 * 1024 * 1024;
 const $ = id => document.getElementById(id);
 const drop = $('drop'), fileInput = $('file'), go = $('go');
 let picked = null;
 let lastUrl = null;
 
 function fmtSize(n) {
+  if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
   if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
   return (n / 1024 / 1024).toFixed(1) + ' MB';
 }
@@ -496,7 +497,7 @@ function pick(file) {
     picked = null;
     go.disabled = true;
     $('fileInfo').style.display = 'none';
-    showError(`文件 ${fmtSize(file.size)}，超过 ${MAX_MB} MB 上限，请换个小一点的文件。`);
+    showError(`文件 ${fmtSize(file.size)}，超过 ${MAX_LABEL} 上限，请换个小一点的文件。`);
     return;
   }
   picked = file;
@@ -609,13 +610,12 @@ function setProgress(stage, ratio) {
   PixelBar.setTarget(ratio);
 }
 
-function floatTo16(f32) {
-  const out = new Int16Array(f32.length);
-  for (let i = 0; i < f32.length; i++) {
-    const s = Math.max(-1, Math.min(1, f32[i]));
-    out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+// 把 float 采样按块转成 int16，复用同一块缓冲，避免为整段音频再复制一份 PCM
+function fillInt16(dst, src, off, n) {
+  for (let k = 0; k < n; k++) {
+    const s = Math.max(-1, Math.min(1, src[off + k]));
+    dst[k] = s < 0 ? s * 0x8000 : s * 0x7FFF;
   }
-  return out;
 }
 
 // 核心转换：任意含音轨的媒体 Blob → MP3 Blob（测试也会直接调它）
@@ -630,18 +630,28 @@ async function convertBlob(blob, kbps, onProgress) {
     ctx.close();
   }
   const channels = Math.min(2, audio.numberOfChannels);
-  const left = floatTo16(audio.getChannelData(0));
-  const right = channels === 2 ? floatTo16(audio.getChannelData(1)) : null;
+  const leftF = audio.getChannelData(0);
+  const rightF = channels === 2 ? audio.getChannelData(1) : null;
+  const total = leftF.length;
   const encoder = new lamejs.Mp3Encoder(channels, audio.sampleRate, kbps);
   const chunkSize = 1152 * 40;
+  const l16 = new Int16Array(chunkSize);
+  const r16 = rightF ? new Int16Array(chunkSize) : null;
   const parts = [];
-  for (let i = 0; i < left.length; i += chunkSize) {
-    const l = left.subarray(i, i + chunkSize);
-    const r = right ? right.subarray(i, i + chunkSize) : undefined;
-    const mp3 = channels === 2 ? encoder.encodeBuffer(l, r) : encoder.encodeBuffer(l);
+  for (let i = 0; i < total; i += chunkSize) {
+    const n = Math.min(chunkSize, total - i);
+    fillInt16(l16, leftF, i, n);
+    const l = n === chunkSize ? l16 : l16.subarray(0, n);
+    let mp3;
+    if (rightF) {
+      fillInt16(r16, rightF, i, n);
+      mp3 = encoder.encodeBuffer(l, n === chunkSize ? r16 : r16.subarray(0, n));
+    } else {
+      mp3 = encoder.encodeBuffer(l);
+    }
     if (mp3.length) parts.push(mp3);
     if (onProgress) {
-      onProgress('编码 MP3', i / left.length);
+      onProgress('编码 MP3', i / total);
       await new Promise(r => setTimeout(r, 0));
     }
   }
