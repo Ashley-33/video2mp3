@@ -49,6 +49,30 @@
   .drop .hint { font-size: 15px; margin-bottom: 4px; }
   .drop .tip { font-size: 12px; color: var(--muted); }
   input[type=file] { display: none; }
+  .or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin-top: 14px; }
+  .or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+  .url-row { display: flex; gap: 8px; margin-top: 12px; }
+  .url-row input {
+    flex: 1; min-width: 0;
+    font: inherit; font-size: 14px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--card);
+    color: var(--ink);
+  }
+  .url-row input:focus { outline: none; border-color: var(--accent); }
+  .url-row button {
+    font: inherit; font-size: 14px; font-weight: 600;
+    padding: 10px 16px;
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    background: var(--card);
+    color: var(--accent);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .url-row button:disabled { opacity: .5; cursor: default; }
   .row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; font-size: 14px; }
   select {
     font: inherit; font-size: 14px;
@@ -124,6 +148,11 @@
       <div class="tip">1 GB 以内</div>
     </div>
     <input type="file" id="file" accept="video/mp4,video/quicktime,audio/mp4,.mp4,.m4v,.mov,.m4a">
+    <div class="or"><span>或</span></div>
+    <div class="url-row">
+      <input type="url" id="videoUrl" placeholder="粘贴视频链接（mp4 直链）">
+      <button id="fetchUrl">获取</button>
+    </div>
     <div class="file-info" id="fileInfo">
       <div class="name" id="fileName"></div>
       <div class="meta" id="fileMeta"></div>
@@ -506,6 +535,65 @@ function pick(file) {
   $('fileInfo').style.display = 'block';
   go.disabled = false;
 }
+
+// —— 链接获取 ——
+const urlInput = $('videoUrl'), urlBtn = $('fetchUrl');
+
+async function readStream(res, name) {
+  const lenHeader = res.headers.get('content-length');
+  const totalLen = lenHeader ? parseInt(lenHeader, 10) : 0;
+  if (totalLen > MAX_SIZE) throw new Error('TOO_LARGE');
+  const reader = res.body.getReader();
+  const chunks = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (received > MAX_SIZE) { reader.cancel(); throw new Error('TOO_LARGE'); }
+    // 拿不到总大小时用渐近比例，只让条子有前进感，不谎报完成
+    const ratio = totalLen ? received / totalLen : received / (received + 20 * 1024 * 1024);
+    setProgress(`下载视频 · ${fmtSize(received)}`, ratio * 0.98);
+  }
+  return new File(chunks, name, { type: res.headers.get('content-type') || 'video/mp4' });
+}
+
+async function fetchFromUrl() {
+  const url = urlInput.value.trim();
+  if (!url) return;
+  if (!/^https?:\/\//i.test(url)) { reset(); showError('链接要以 http:// 或 https:// 开头。'); return; }
+  reset();
+  urlBtn.disabled = true;
+  urlBtn.textContent = '下载中…';
+  let name = 'video.mp4';
+  try {
+    const base = decodeURIComponent(new URL(url).pathname.split('/').pop() || '');
+    if (base) name = /\.[a-z0-9]{2,5}$/i.test(base) ? base : base + '.mp4';
+  } catch {}
+  try {
+    let res = null;
+    try { res = await fetch(url); } catch {}
+    if (!res || !res.ok) {
+      // 源站不允许跨域直读时，走同源代理（部署环境是 CF Pages Function，本地是 serve.mjs）
+      try { res = await fetch('/fetch?url=' + encodeURIComponent(url)); } catch {}
+    }
+    if (!res || !res.ok) throw new Error('FETCH_FAIL');
+    const file = await readStream(res, name);
+    pick(file);
+  } catch (err) {
+    console.error(err);
+    reset();
+    showError(err.message === 'TOO_LARGE'
+      ? `链接指向的文件超过 ${MAX_LABEL} 上限。`
+      : '没能下载这个链接。请确认它是视频文件的直链；若源站禁止外部读取，需在部署好的站点上使用（本地双击打开的页面没有代理）。');
+  } finally {
+    urlBtn.disabled = false;
+    urlBtn.textContent = '获取';
+  }
+}
+urlBtn.addEventListener('click', fetchFromUrl);
+urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') fetchFromUrl(); });
 
 drop.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => pick(fileInput.files[0]));
