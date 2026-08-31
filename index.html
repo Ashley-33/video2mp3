@@ -62,17 +62,6 @@
     color: var(--ink);
   }
   .url-row input:focus { outline: none; border-color: var(--accent); }
-  .url-row button {
-    font: inherit; font-size: 14px; font-weight: 600;
-    padding: 10px 16px;
-    border: 1px solid var(--accent);
-    border-radius: 10px;
-    background: var(--card);
-    color: var(--accent);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .url-row button:disabled { opacity: .5; cursor: default; }
   .row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; font-size: 14px; }
   select {
     font: inherit; font-size: 14px;
@@ -150,8 +139,7 @@
     <input type="file" id="file" accept="video/mp4,video/quicktime,audio/mp4,.mp4,.m4v,.mov,.m4a">
     <div class="or"><span>或</span></div>
     <div class="url-row">
-      <input type="url" id="videoUrl" placeholder="粘贴视频链接（mp4 直链）">
-      <button id="fetchUrl">获取</button>
+      <input type="url" id="videoUrl" placeholder="粘贴视频直链或小红书笔记链接">
     </div>
     <div class="file-info" id="fileInfo">
       <div class="name" id="fileName"></div>
@@ -522,6 +510,7 @@ function reset() {
 function pick(file) {
   reset();
   if (!file) return;
+  urlInput.value = '';           // 链接和文件二选一，后动的那个生效
   if (file.size > MAX_SIZE) {
     picked = null;
     go.disabled = true;
@@ -536,10 +525,37 @@ function pick(file) {
   go.disabled = false;
 }
 
-// —— 链接获取 ——
-const urlInput = $('videoUrl'), urlBtn = $('fetchUrl');
+// —— 链接来源 ——
+// 文件和链接共用同一个「转换为 MP3」按钮：填了链接就自动「下载 + 转换」一步完成。
+const urlInput = $('videoUrl');
 
-async function readStream(res, name) {
+// 页面型链接（笔记页不是视频文件）：跨域直读必败，直接走代理让服务端解析
+function isPageLink(url) {
+  try {
+    const h = new URL(url).hostname;
+    return /(^|\.)xiaohongshu\.com$/i.test(h) || /(^|\.)xhslink\.com$/i.test(h);
+  } catch { return false; }
+}
+
+// 下载占整条进度的前 40%，转换接着走完
+async function downloadFromUrl(url) {
+  let res = null;
+  if (!isPageLink(url)) { try { res = await fetch(url); } catch {} }
+  if (!res || !res.ok) {
+    // 源站不允许跨域直读时，走同源代理（部署环境是 CF Pages Function，本地是 serve.mjs）
+    try { res = await fetch('/fetch?url=' + encodeURIComponent(url)); } catch {}
+  }
+  if (!res || !res.ok) throw new Error('FETCH_FAIL');
+  let name = 'video.mp4';
+  const hinted = res.headers.get('x-filename');   // 代理从笔记标题推导的文件名
+  if (hinted) {
+    try { name = decodeURIComponent(hinted); } catch {}
+  } else {
+    try {
+      const base = decodeURIComponent(new URL(url).pathname.split('/').pop() || '');
+      if (base) name = /\.[a-z0-9]{2,5}$/i.test(base) ? base : base + '.mp4';
+    } catch {}
+  }
   const lenHeader = res.headers.get('content-length');
   const totalLen = lenHeader ? parseInt(lenHeader, 10) : 0;
   if (totalLen > MAX_SIZE) throw new Error('TOO_LARGE');
@@ -554,46 +570,22 @@ async function readStream(res, name) {
     if (received > MAX_SIZE) { reader.cancel(); throw new Error('TOO_LARGE'); }
     // 拿不到总大小时用渐近比例，只让条子有前进感，不谎报完成
     const ratio = totalLen ? received / totalLen : received / (received + 20 * 1024 * 1024);
-    setProgress(`下载视频 · ${fmtSize(received)}`, ratio * 0.98);
+    setProgress(`下载视频 · ${fmtSize(received)}`, ratio * 0.4);
   }
   return new File(chunks, name, { type: res.headers.get('content-type') || 'video/mp4' });
 }
 
-async function fetchFromUrl() {
-  const url = urlInput.value.trim();
-  if (!url) return;
-  if (!/^https?:\/\//i.test(url)) { reset(); showError('链接要以 http:// 或 https:// 开头。'); return; }
-  reset();
-  urlBtn.disabled = true;
-  urlBtn.textContent = '下载中…';
-  let name = 'video.mp4';
-  try {
-    const base = decodeURIComponent(new URL(url).pathname.split('/').pop() || '');
-    if (base) name = /\.[a-z0-9]{2,5}$/i.test(base) ? base : base + '.mp4';
-  } catch {}
-  try {
-    let res = null;
-    try { res = await fetch(url); } catch {}
-    if (!res || !res.ok) {
-      // 源站不允许跨域直读时，走同源代理（部署环境是 CF Pages Function，本地是 serve.mjs）
-      try { res = await fetch('/fetch?url=' + encodeURIComponent(url)); } catch {}
-    }
-    if (!res || !res.ok) throw new Error('FETCH_FAIL');
-    const file = await readStream(res, name);
-    pick(file);
-  } catch (err) {
-    console.error(err);
-    reset();
-    showError(err.message === 'TOO_LARGE'
-      ? `链接指向的文件超过 ${MAX_LABEL} 上限。`
-      : '没能下载这个链接。请确认它是视频文件的直链；若源站禁止外部读取，需在部署好的站点上使用（本地双击打开的页面没有代理）。');
-  } finally {
-    urlBtn.disabled = false;
-    urlBtn.textContent = '获取';
+urlInput.addEventListener('input', () => {
+  const has = urlInput.value.trim().length > 0;
+  if (has && picked) {           // 链接和文件二选一，后动的那个生效
+    picked = null;
+    $('fileInfo').style.display = 'none';
   }
-}
-urlBtn.addEventListener('click', fetchFromUrl);
-urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') fetchFromUrl(); });
+  go.disabled = !has && !picked;
+});
+urlInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !go.disabled) go.click();
+});
 
 drop.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => pick(fileInput.files[0]));
@@ -751,25 +743,37 @@ async function convertBlob(blob, kbps, onProgress) {
 window.convertBlob = convertBlob; // 供自动化测试调用
 
 go.addEventListener('click', async () => {
-  if (!picked) return;
+  const url = urlInput.value.trim();
+  if (!picked && !url) return;
   reset();
   go.disabled = true;
   const kbps = parseInt($('bitrate').value, 10);
   try {
-    const { blob, duration } = await convertBlob(picked, kbps, setProgress);
+    let source = picked;
+    let offset = 0;
+    if (!source) {
+      if (!/^https?:\/\//i.test(url)) throw new Error('BAD_URL');
+      source = await downloadFromUrl(url);
+      offset = 0.4;
+    }
+    const { blob, duration } = await convertBlob(source, kbps,
+      (stage, r) => setProgress(stage, offset + r * (1 - offset)));
     await PixelBar.done();   // 等像素铺满再亮下载按钮
     lastUrl = URL.createObjectURL(blob);
     const a = $('dl');
     a.href = lastUrl;
-    a.download = picked.name.replace(/\.[^.]+$/, '') + '.mp3';
+    a.download = source.name.replace(/\.[^.]+$/, '') + '.mp3';
     $('resultMeta').textContent = `${fmtDur(duration)} · ${fmtSize(blob.size)} · ${kbps} kbps`;
     $('result').style.display = 'block';
   } catch (err) {
     console.error(err);
     $('progressWrap').style.display = 'none';
-    showError('转换失败：没能从这个文件里解出音轨。请确认它是带声音的 MP4（AAC 音轨）。');
+    showError(err.message === 'BAD_URL' ? '链接要以 http:// 或 https:// 开头。'
+      : err.message === 'TOO_LARGE' ? `文件超过 ${MAX_LABEL} 上限。`
+      : err.message === 'FETCH_FAIL' ? '没能下载这个链接。请确认它可以公开访问；小红书链接偶尔会因平台策略变化失败，可稍后再试。'
+      : '转换失败：没能从这个文件里解出音轨。请确认它是带声音的视频（AAC 音轨）。');
   } finally {
-    go.disabled = false;
+    go.disabled = !picked && !urlInput.value.trim();
   }
 });
 </script>
